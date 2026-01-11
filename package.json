@@ -5,7 +5,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test msg\" && exit 1"
+    "test": "echo \"Error: no test msg\" && exit 1",
+    "check": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",

@@ -4,7 +4,7 @@ import { KeyPair } from '../shared/types.js';
 export class IdentityKeyGenerator {
   static generate(): KeyPair {
     const keyPair = crypto.generateKeyPairSync('ec', {
-      namedCurve: 'prime256v1', // P-256
+      namedCurve: 'prime256v1', 
       publicKeyEncoding: { type: 'spki', format: 'der' },
       privateKeyEncoding: { type: 'pkcs8', format: 'der' }
     });

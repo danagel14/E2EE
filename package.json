@@ -12,7 +12,25 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@types/node": "^20.x.x",
-    "typescript": "^5.x.x"
-  }
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.19.28",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "mongoose": "^9.1.2",
+    "socket.io": "^4.8.3",
+    "undici-types": "^6.21.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danagel14/E2EE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/danagel14/E2EE/issues"
+  },
+  "homepage": "https://github.com/danagel14/E2EE#readme"
 }

@@ -1,0 +1,36 @@
+{
+  "name": "e2ee",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test msg\" && exit 1",
+    "check": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.19.28",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "mongoose": "^9.1.2",
+    "socket.io": "^4.8.3",
+    "undici-types": "^6.21.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danagel14/E2EE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/danagel14/E2EE/issues"
+  },
+  "homepage": "https://github.com/danagel14/E2EE#readme"
+}

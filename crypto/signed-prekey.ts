@@ -8,10 +8,17 @@ export class SignedPreKeyGenerator {
       privateKeyEncoding: { type: 'pkcs8', format: 'der' }
     });
 
+    // המרת Buffer ל-KeyObject לצורך חתימה
+    const privateKeyObject = crypto.createPrivateKey({
+      key: identityPrivateKey,
+      format: 'der',
+      type: 'pkcs8'
+    });
+
     const sign = crypto.createSign('SHA256');
     sign.update(publicKey);
     sign.end();
-    const signature = sign.sign(identityPrivateKey);
+    const signature = sign.sign(privateKeyObject);
 
     return {
       keyId,

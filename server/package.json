@@ -5,8 +5,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-   "start": "tsx index.ts",
-  "dev": "node --loader ts-node/esm index.ts"
+    "start": "tsx index.ts",
+    "dev": "tsx index.ts"
   },
   "keywords": [],
   "author": "",

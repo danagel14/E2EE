@@ -10,7 +10,7 @@ export class DoubleRatchet {
     }
 
     getNextMessageKey() {
-        
+
         const messageKey = crypto.createHmac('sha256', this.chainKey).update('message-key').digest();
         this.chainKey = crypto.createHmac('sha256', this.chainKey).update('next-chain-key').digest();
 

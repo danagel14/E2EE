@@ -1,6 +1,7 @@
 
+
 export class KeyPair {
-  constructor(public publicKey: Buffer, private privateKey: Buffer) {}
+  constructor(public publicKey: Buffer, public privateKey: Buffer) { }
 }
 
 export class KeyBundle {
@@ -9,5 +10,5 @@ export class KeyBundle {
     public signedPreKey: Buffer,
     public signedPreKeySignature: Buffer,
     public oneTimePreKeys: Buffer[] = []
-  ) {}
+  ) { }
 }

@@ -1,16 +1,16 @@
 import crypto from 'crypto';
-import { KeyBundle } from '../shared/types.js'; 
+import { KeyBundle } from '../shared/types.js';
 
 export class X3DH {
-  
+
   static deriveSharedSecret(
     senderIdentityPriv: Buffer,
     senderEphemeralPriv: Buffer,
-    recipientBundle: KeyBundle
+    recipientBundle: KeyBundle,
+    oneTimePreKey?: Buffer  // Optional OPK for DH4
   ): Buffer {
-    
-    // כאן אנחנו הופכים את ה-Buffer ל-KeyObject
-    // זה מה ש-TypeScript דורש כדי להשתיק את השגיאה
+
+
     const toPrivKey = (buf: Buffer) => crypto.createPrivateKey({
       key: buf,
       format: 'der',
@@ -23,23 +23,37 @@ export class X3DH {
       type: 'spki'
     });
 
-    // כעת הפונקציה מקבלת אובייקטים מתאימים ולא Buffer גולמי
+    // DH1: IKa || SPKb
     const dh1 = crypto.diffieHellman({
       privateKey: toPrivKey(senderIdentityPriv),
       publicKey: toPubKey(recipientBundle.signedPreKey)
     });
 
+    // DH2: EKa || IKb
     const dh2 = crypto.diffieHellman({
       privateKey: toPrivKey(senderEphemeralPriv),
       publicKey: toPubKey(recipientBundle.identityKey)
     });
 
+    // DH3: EKa || SPKb
     const dh3 = crypto.diffieHellman({
       privateKey: toPrivKey(senderEphemeralPriv),
       publicKey: toPubKey(recipientBundle.signedPreKey)
     });
 
-    const combinedSecret = Buffer.concat([dh1, dh2, dh3]);
+    // DH4: EKa || OPKb (if available - provides forward secrecy)
+    let combinedSecret = Buffer.concat([dh1, dh2, dh3]);
+
+    if (oneTimePreKey) {
+      const dh4 = crypto.diffieHellman({
+        privateKey: toPrivKey(senderEphemeralPriv),
+        publicKey: toPubKey(oneTimePreKey)
+      });
+      combinedSecret = Buffer.concat([combinedSecret, dh4]);
+      console.log('X3DH: Using One-Time Prekey (DH4) for enhanced forward secrecy');
+    } else {
+      console.log('X3DH: No One-Time Prekey available, using 3-DH only');
+    }
 
     return crypto.createHash('sha256').update(combinedSecret).digest();
   }

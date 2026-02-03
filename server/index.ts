@@ -97,6 +97,12 @@ io.on('connection', (socket) => {
   // אתחול session בין שני משתמשים (X3DH -> DoubleRatchet)
   socket.on('init-session', async (data: { from: string; to: string }, cb?: (res: any) => void) => {
     try {
+      console.log('\n========================================');
+      console.log('     X3DH HANDSHAKE INITIATED');
+      console.log('========================================');
+      console.log(`Sender: User ${data.from}`);
+      console.log(`Recipient: User ${data.to}`);
+
       const sender = await UserModel.findOne({ userId: data.from });
       const recipient = await UserModel.findOne({ userId: data.to });
 
@@ -105,8 +111,16 @@ io.on('connection', (socket) => {
         return;
       }
 
+      console.log(`\nKey Bundles Retrieved:`);
+      console.log(`  Sender Identity Key: ${sender.identityKeyPublic.slice(0, 30)}...`);
+      console.log(`  Recipient Identity Key: ${recipient.identityKeyPublic.slice(0, 30)}...`);
+
       // שימוש ב-One-Time Prekey (אם זמין)
       const opk = await consumeOneTimePreKey(data.to);
+      console.log(`\nOne-Time PreKey Status: ${opk ? 'CONSUMED' : 'NOT AVAILABLE'}`);
+      if (opk) {
+        console.log(`  OPK ID: ${opk.keyId}`);
+      }
 
       // בניית recipient bundle
       const recipientBundle = {
@@ -124,6 +138,16 @@ io.on('connection', (socket) => {
       // X3DH עם One-Time Prekey (DH4)
       const oneTimePreKeyBuffer = opk ? Buffer.from(opk.publicKey, 'base64') : undefined;
 
+      console.log(`\nPerforming X3DH Diffie-Hellman Operations:`);
+      console.log(`  DH1: IKa (sender identity) || SPKb (recipient signed prekey)`);
+      console.log(`  DH2: EKa (sender ephemeral) || IKb (recipient identity)`);
+      console.log(`  DH3: EKa (sender ephemeral) || SPKb (recipient signed prekey)`);
+      if (oneTimePreKeyBuffer) {
+        console.log(`  DH4: EKa (sender ephemeral) || OPKb (one-time prekey) [INCLUDED]`);
+      } else {
+        console.log(`  DH4: SKIPPED (no OPK available)`);
+      }
+
       const sharedSecret = X3DH.deriveSharedSecret(
         senderIdentityPriv,
         senderEphemeralPriv,
@@ -131,24 +155,43 @@ io.on('connection', (socket) => {
         oneTimePreKeyBuffer
       );
 
+      console.log(`\nShared Secret Generated (SHA-256):`);
+      console.log(`  ${sharedSecret.toString('hex').slice(0, 64)}...`);
+
       const dr = new DoubleRatchet(sharedSecret);
       const key = ratchetKey(data.from, data.to);
       ratchets.set(key, dr);
 
+      console.log(`\nDouble Ratchet Initialized for session: ${key}`);
+
       // בדיקה אם צריך להוסיף OPK חדשים
       await replenishOneTimePreKeys(data.to);
 
-      console.log(`✅ Session initialized: ${data.from} -> ${data.to} ${opk ? 'with OPK' : 'without OPK'}`);
+      console.log(`\n========================================`);
+      console.log(`  SESSION ESTABLISHED SUCCESSFULLY`);
+      console.log(`========================================`);
+      console.log(`Session: ${data.from} <-> ${data.to}`);
+      console.log(`Security Level: ${opk ? '4-DH (with OPK)' : '3-DH (without OPK)'}\n`);
+
       cb && cb({ ok: true, usedOPK: !!opk });
     } catch (err: any) {
-      console.error('init-session error', err);
+      console.error('ERROR: init-session failed', err);
       cb && cb({ ok: false, error: err.message });
     }
   });
 
   // שליחת הודעה: השרת מבצע "הצפנה" בסיסית לפני שליחה לנמען
   socket.on('send-message', async (data: { to: string; from: string; plaintext: string }) => {
-    console.log('send-message received:', data);
+    // Add RTL marker for proper Hebrew display
+    const displayText = data.plaintext.match(/[\u0590-\u05FF]/)
+      ? `\u202B${data.plaintext}\u202C`
+      : data.plaintext;
+
+    console.log('send-message received:', {
+      to: data.to,
+      from: data.from,
+      plaintext: displayText
+    });
     const key = ratchetKey(data.from, data.to);
     let dr = ratchets.get(key);
 

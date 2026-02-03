@@ -56,6 +56,15 @@ function App() {
   // Double Ratchet instances לפענוח הודעות
   const [ratchets] = useState<Map<string, DoubleRatchet>>(new Map())
 
+  // איפוס צ'אטים והודעות כשמחליפים משתמש
+  useEffect(() => {
+    setChats([])
+    setMessages([])
+    setSelectedChat(null)
+    ratchets.clear()
+  }, [myId])
+
+
   // --- האזנה להודעות נכנסות מהשרת והרשמה ---
   useEffect(() => {
     socket.on('connect', () => {
@@ -86,13 +95,19 @@ function App() {
       const ratchetKey = [myId, fromId].sort().join('|')
       let plaintext = data.ciphertext
 
-      const ratchet = ratchets.get(ratchetKey)
-      if (ratchet) {
-        plaintext = ratchet.decrypt(data.ciphertext)
-        console.log('✅ Decrypted message:', plaintext)
-      } else {
-        console.warn('⚠️ No ratchet for', ratchetKey, '- showing ciphertext')
+      let ratchet = ratchets.get(ratchetKey)
+
+      // אם אין ratchet, ליצור אחד (המקבל צריך גם ratchet!)
+      if (!ratchet) {
+        console.log('🔑 Creating receiver ratchet for', ratchetKey)
+        const demoSecret = `secret-${ratchetKey}`
+        ratchet = new DoubleRatchet(demoSecret)
+        ratchets.set(ratchetKey, ratchet)
       }
+
+      // פענוח ההודעה
+      plaintext = ratchet.decrypt(data.ciphertext)
+      console.log('✅ Decrypted message:', plaintext)
 
       // עדכון רשימת הצ׳אטים
       setChats(prevChats => {
@@ -198,25 +213,25 @@ function App() {
       isOwn: true
     }
 
-    // בקשה ל-init-session (דמו, בלי לחכות לתשובה)
+    // יצירת ratchet בצד הקליינט לפני שליחת ההודעה
+    const ratchetKey = [myId, selectedChat].sort().join('|')
+    if (!ratchets.has(ratchetKey)) {
+      // בפועל צריך לקבל shared secret מ-X3DH, אבל לדמו נשתמש במפתח פשוט
+      const demoSecret = `secret-${ratchetKey}`
+      ratchets.set(ratchetKey, new DoubleRatchet(demoSecret))
+      console.log('✅ Created client ratchet for', ratchetKey)
+    }
+
+    // בקשה ל-init-session ושליחת ההודעה רק אחרי אתחול
     socket.emit('init-session', { from: myId, to: selectedChat }, (res: any) => {
       console.log('init-session result', res)
 
-      // יצירת ratchet בצד הקליינט
-      const ratchetKey = [myId, selectedChat].sort().join('|')
-      if (!ratchets.has(ratchetKey)) {
-        // בפועל צריך לקבל shared secret מ-X3DH, אבל לדמו נשתמש במפתח פשוט
-        const demoSecret = `secret-${ratchetKey}`
-        ratchets.set(ratchetKey, new DoubleRatchet(demoSecret))
-        console.log('✅ Created client ratchet for', ratchetKey)
-      }
-    })
-
-    // שליחת טקסט גלוי – השרת יבצע "הצפנה" בסיסית
-    socket.emit('send-message', {
-      to: selectedChat,
-      from: myId,
-      plaintext: text.trim(),
+      // שליחת טקסט גלוי – השרת יבצע "הצפנה" בסיסית
+      socket.emit('send-message', {
+        to: selectedChat,
+        from: myId,
+        plaintext: text.trim(),
+      })
     })
 
     setMessages(prev => [...prev, newMessage])

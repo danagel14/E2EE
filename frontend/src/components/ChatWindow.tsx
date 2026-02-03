@@ -16,12 +16,18 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, onSendMessage, 
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const emojiButtonRef = useRef<HTMLButtonElement>(null)
-  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const emojiButtonRef = useRef<HTMLDivElement>(null)
+  const menuButtonRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // איפוס תיבת הקלט כשמחליפים צ'אט
+  useEffect(() => {
+    setInputValue('')
+  }, [chat.id])
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -71,8 +77,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, onSendMessage, 
         </div>
         <div className="chat-window-actions">
           <div className="menu-wrapper" ref={menuButtonRef}>
-            <button 
-              className="icon-button" 
+            <button
+              className="icon-button"
               onClick={() => setShowMenu(!showMenu)}
             >
               ⋯
@@ -96,8 +102,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ chat, messages, onSendMessage, 
       <form className="chat-input-form" onSubmit={handleSubmit}>
         <div className="chat-input-container">
           <div className="emoji-button-wrapper" ref={emojiButtonRef}>
-            <button 
-              type="button" 
+            <button
+              type="button"
               className="icon-button emoji-button"
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
             >

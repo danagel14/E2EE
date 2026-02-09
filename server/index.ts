@@ -67,7 +67,23 @@ io.on('connection', (socket) => {
   // רישום session לפי userId
   socket.on('register-session', (userId: string) => {
     console.log(`User registered session: ${userId} -> ${socket.id}`);
+
+    // Clear any previous registrations for this socket to prevent "ghost" sessions
+    // where one socket receives messages for multiple users
+    for (const [existingUserId, existingSocketId] of userSockets.entries()) {
+      if (existingSocketId === socket.id && existingUserId !== userId) {
+        userSockets.delete(existingUserId);
+        console.log(`Cleared previous session for socket ${socket.id}: User ${existingUserId}`);
+      }
+    }
+
     userSockets.set(userId, socket.id);
+
+    console.log('--- Active Sessions ---');
+    for (const [uid, sid] of userSockets.entries()) {
+      console.log(`  User ${uid}: ${sid}`);
+    }
+    console.log('-----------------------');
   });
 
   // רישום Bundle של מפתחות משתמש - יצירת מפתחות אמיתיים
@@ -212,7 +228,6 @@ io.on('connection', (socket) => {
       await MessageModel.create({
         from: data.from,
         to: data.to,
-        ciphertext,
         chatId,
         timestamp: new Date()
       });
@@ -222,6 +237,9 @@ io.on('connection', (socket) => {
     }
 
     // שליחת ההודעה למקבל - רק ciphertext (E2EE אמיתי!)
+    console.log(`Attempting to route to User ${data.to}`);
+    console.log('Active users map:', [...userSockets.keys()]);
+
     const targetSocketId = userSockets.get(data.to);
     if (targetSocketId) {
       io.to(targetSocketId).emit('receive-message', {

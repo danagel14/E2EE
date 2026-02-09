@@ -28,7 +28,6 @@ export const UserModel = mongoose.model('User', UserSchema);
 const MessageSchema = new mongoose.Schema({
   from: { type: String, required: true },
   to: { type: String, required: true },
-  ciphertext: { type: String, required: true },
   chatId: { type: String, required: true, index: true },
   timestamp: { type: Date, default: Date.now }
 });

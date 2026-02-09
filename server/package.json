@@ -24,6 +24,7 @@
     "mongoose": "^9.1.2",
     "save-dev": "^0.0.1-security",
     "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.21.0",
     "undici-types": "^6.21.0"
   },

@@ -226,11 +226,15 @@ function App() {
     socket.emit('init-session', { from: myId, to: selectedChat }, (res: any) => {
       console.log('init-session result', res)
 
+      const r = ratchets.get([myId, selectedChat].sort().join('|'))
+      // אם יש מפתח מצפינים, אחרת שולחים רגיל (רק ליתר ביטחון)
+      const encrypted = r ? r.encrypt(text.trim()) : text.trim()
       // שליחת טקסט גלוי – השרת יבצע "הצפנה" בסיסית
       socket.emit('send-message', {
         to: selectedChat,
         from: myId,
-        plaintext: text.trim(),
+        ciphertext: encrypted, 
+        // plaintext: text.trim(), // (מחקנו את השורה הזו)
       })
     })
 

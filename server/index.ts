@@ -196,58 +196,34 @@ io.on('connection', (socket) => {
     }
   });
 
-  // שליחת הודעה: השרת מבצע "הצפנה" בסיסית לפני שליחה לנמען
-  socket.on('send-message', async (data: { to: string; from: string; plaintext: string }) => {
-    // Add RTL marker for proper Hebrew display
-    const displayText = data.plaintext.match(/[\u0590-\u05FF]/)
-      ? `\u202B${data.plaintext}\u202C`
-      : data.plaintext;
+  
+  socket.on('send-message', async (data: { to: string; from: string; ciphertext: any }) => {
+    console.log(`📩 Encrypted packet received: ${data.from} -> ${data.to}`);
 
-    console.log('send-message received:', {
-      to: data.to,
-      from: data.from,
-      plaintext: displayText
-    });
-    const key = ratchetKey(data.from, data.to);
-    let dr = ratchets.get(key);
-
-    let ciphertext: string;
-
-    if (!dr) {
-      console.warn('No ratchet yet, sending plaintext (need init-session first)');
-      ciphertext = data.plaintext;
-    } else {
-      const mk = dr.getNextMessageKey();
-      ciphertext = Buffer.from(data.plaintext, 'utf8').toString('base64') +
-        '.' + mk.toString('hex').slice(0, 16);
-    }
-
-    // שמירת ההודעה ב-MongoDB
     try {
-      const chatId = ratchetKey(data.from, data.to);
       await MessageModel.create({
         from: data.from,
         to: data.to,
-        chatId,
+        
+        ciphertext: typeof data.ciphertext === 'object' ? JSON.stringify(data.ciphertext) : data.ciphertext,
+        chatId: ratchetKey(data.from, data.to),
         timestamp: new Date()
       });
-      console.log(`Message saved to DB: ${data.from} -> ${data.to}`);
+      console.log(`✅ Encrypted message saved to DB`);
     } catch (err) {
-      console.error('Error saving message to DB:', err);
+      console.error('❌ Error saving message to DB:', err);
     }
 
-    // שליחת ההודעה למקבל - רק ciphertext (E2EE אמיתי!)
-    console.log(`Attempting to route to User ${data.to}`);
-    console.log('Active users map:', [...userSockets.keys()]);
 
     const targetSocketId = userSockets.get(data.to);
     if (targetSocketId) {
       io.to(targetSocketId).emit('receive-message', {
         from: data.from,
-        ciphertext  // רק ciphertext - הקליינט יפענח!
+        ciphertext: data.ciphertext 
       });
+      console.log(`🚀 Forwarded encrypted packet to user ${data.to}`);
     } else {
-      console.warn(`Target user ${data.to} is not connected`);
+      console.warn(`⚠️ Target user ${data.to} is not connected (message stored in DB)`);
     }
   });
 

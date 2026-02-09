@@ -162,15 +162,8 @@ io.on('connection', (socket) => {
   });
 
   // Init Session - Deprecated/Relay Only
-  // The client now does X3DH. But the client sends "session-request" to the recipient
-  // to notify them of the ephemeral keys.
-  socket.on('session-request', (data: any) => {
-    // data: { to, from, senderIdentityKey, senderEphemeralKey, usedOneTimePreKeyId }
-    const targetSocketId = userSockets.get(data.to);
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('session-request', data);
-    }
-  });
+  // The client now uses PreKeyMessage to bundle the handshake with the first message.
+  // socket.on('session-request', ...) removed.
 
   // שליחת הודעה: השרת רק מעביר את ה-Ciphertext
   socket.on('send-message', async (data: { to: string; from: string; ciphertext: string }) => {

@@ -4,21 +4,18 @@ import mongoose from 'mongoose';
 const UserSchema = new mongoose.Schema({
   userId: { type: String, unique: true, required: true },
 
-  // Identity Key (IK) - long-term key pair
+  // Identity Key (IK) - Public Only
   identityKeyPublic: { type: String, required: true },
-  identityKeyPrivate: { type: String, required: true },
 
-  // Signed Pre Key (SPK) - medium-term key pair
+  // Signed Pre Key (SPK) - Public Only
   signedPreKeyId: { type: Number, required: true },
   signedPreKeyPublic: { type: String, required: true },
-  signedPreKeyPrivate: { type: String, required: true },
   signedPreKeySignature: { type: String, required: true },
 
-  // One-Time Pre Keys (OPK) - single-use key pairs
+  // One-Time Pre Keys (OPK) - Public Only
   oneTimePreKeys: [{
     keyId: { type: Number, required: true },
     publicKey: { type: String, required: true },
-    privateKey: { type: String, required: true },
     used: { type: Boolean, default: false }
   }]
 });

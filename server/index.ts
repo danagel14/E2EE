@@ -16,6 +16,7 @@ app.use(cors({
     'http://localhost:5173',
     'http://localhost:3000',
     'http://localhost:5174',
+    'http://localhost:5175',
   ],
   methods: ['GET', 'POST'],
   credentials: true,
@@ -68,12 +69,10 @@ io.on('connection', (socket) => {
   socket.on('register-session', (userId: string) => {
     console.log(`User registered session: ${userId} -> ${socket.id}`);
 
-    // Clear any previous registrations for this socket to prevent "ghost" sessions
-    // where one socket receives messages for multiple users
+    // Clear any previous registrations for this socket
     for (const [existingUserId, existingSocketId] of userSockets.entries()) {
       if (existingSocketId === socket.id && existingUserId !== userId) {
         userSockets.delete(existingUserId);
-        console.log(`Cleared previous session for socket ${socket.id}: User ${existingUserId}`);
       }
     }
 
@@ -86,23 +85,31 @@ io.on('connection', (socket) => {
     console.log('-----------------------');
   });
 
-  // רישום Bundle של מפתחות משתמש - יצירת מפתחות אמיתיים
-  socket.on('register-keys', async (data: { userId: string }, cb?: (res: any) => void) => {
+  // רישום Bundle של מפתחות ציבוריים מהקליינט
+  socket.on('register-keys', async (data: any, cb?: (res: any) => void) => {
     try {
-      const { userId } = data;
+      const { userId, identityKeyPublic, signedPreKeyId, signedPreKeyPublic, signedPreKeySignature, oneTimePreKeys } = data;
 
-      // בדיקה אם המשתמש כבר קיים
-      const existingUser = await UserModel.findOne({ userId });
-      if (existingUser) {
-        console.log(`User ${userId} already has keys`);
-        cb && cb({ ok: true, message: 'Keys already exist' });
+      if (!userId || !identityKeyPublic || !signedPreKeyPublic) {
+        cb && cb({ ok: false, error: 'Missing Required Keys' });
         return;
       }
 
-      // יצירת מפתחות קריפטוגרפיים אמיתיים
-      await generateUserKeys(userId);
+      // שמירה/עדכון ב-DB (רק מפתחות ציבוריים!)
+      await UserModel.findOneAndUpdate(
+        { userId },
+        {
+          userId,
+          identityKeyPublic,
+          signedPreKeyId,
+          signedPreKeyPublic,
+          signedPreKeySignature,
+          oneTimePreKeys: oneTimePreKeys // Array of { keyId, publicKey }
+        },
+        { upsert: true, new: true }
+      );
 
-      console.log(`✅ Generated cryptographic keys for user ${userId}`);
+      console.log(`✅ Registered Public Keys for user ${userId}`);
       cb && cb({ ok: true });
     } catch (err: any) {
       console.error('register-keys error', err);
@@ -110,120 +117,131 @@ io.on('connection', (socket) => {
     }
   });
 
-  // אתחול session בין שני משתמשים (X3DH -> DoubleRatchet)
-  socket.on('init-session', async (data: { from: string; to: string }, cb?: (res: any) => void) => {
+  // קבלת PreKey Bundle עבור משתמש אחר (כדי להתחיל X3DH בקליינט)
+  socket.on('get-prekey-bundle', async (data: { userId: string }, cb?: (res: any) => void) => {
     try {
-      console.log('\n========================================');
-      console.log('     X3DH HANDSHAKE INITIATED');
-      console.log('========================================');
-      console.log(`Sender: User ${data.from}`);
-      console.log(`Recipient: User ${data.to}`);
-
-      const sender = await UserModel.findOne({ userId: data.from });
-      const recipient = await UserModel.findOne({ userId: data.to });
-
-      if (!sender || !recipient) {
-        cb && cb({ ok: false, error: 'Missing key bundles' });
+      const user = await UserModel.findOne({ userId: data.userId });
+      if (!user) {
+        cb && cb({ ok: false, error: 'User not found' });
         return;
       }
 
-      console.log(`\nKey Bundles Retrieved:`);
-      console.log(`  Sender Identity Key: ${sender.identityKeyPublic.slice(0, 30)}...`);
-      console.log(`  Recipient Identity Key: ${recipient.identityKeyPublic.slice(0, 30)}...`);
+      // מציאת OPK זמין
+      // Atomic update to mark as available?
+      // For concurrent safety we should findOneAndUpdate.
+      // Note: Since we removed private keys, we can't "consume" it in the same way (returning priv key), 
+      // but we still mark it used so others don't use it.
 
-      // שימוש ב-One-Time Prekey (אם זמין)
-      const opk = await consumeOneTimePreKey(data.to);
-      console.log(`\nOne-Time PreKey Status: ${opk ? 'CONSUMED' : 'NOT AVAILABLE'}`);
-      if (opk) {
-        console.log(`  OPK ID: ${opk.keyId}`);
+      // However, to get the value to return, we first need to find it.
+      // Better: Find an unused one, mark as used, return it.
+
+      const availableOPK = user.oneTimePreKeys.find((key: any) => !key.used);
+
+      if (availableOPK) {
+        await UserModel.updateOne(
+          { userId: data.userId, 'oneTimePreKeys.keyId': availableOPK.keyId },
+          { $set: { 'oneTimePreKeys.$.used': true } }
+        );
+        console.log(`Consumed OPK ${availableOPK.keyId} for user ${data.userId} (Handed to sender)`);
       }
 
-      // בניית recipient bundle
-      const recipientBundle = {
-        userId: recipient.userId,
-        identityKey: Buffer.from(recipient.identityKeyPublic, 'base64'),
-        signedPreKey: Buffer.from(recipient.signedPreKeyPublic, 'base64'),
-        signedPreKeySignature: Buffer.from(recipient.signedPreKeySignature, 'base64'),
-        oneTimePreKeys: [] // לא בשימוש כרגע
+      const bundle = {
+        userId: user.userId,
+        identityKey: user.identityKeyPublic,
+        signedPreKey: user.signedPreKeyPublic,
+        signedPreKeySignature: user.signedPreKeySignature,
+        oneTimePreKey: availableOPK ? availableOPK.publicKey : null,
+        oneTimePreKeyId: availableOPK ? availableOPK.keyId : null
       };
 
-      // מפתחות השולח
-      const senderIdentityPriv = Buffer.from(sender.identityKeyPrivate, 'base64');
-      const senderEphemeralPriv = Buffer.from(sender.signedPreKeyPrivate, 'base64');
-
-      // X3DH עם One-Time Prekey (DH4)
-      const oneTimePreKeyBuffer = opk ? Buffer.from(opk.publicKey, 'base64') : undefined;
-
-      console.log(`\nPerforming X3DH Diffie-Hellman Operations:`);
-      console.log(`  DH1: IKa (sender identity) || SPKb (recipient signed prekey)`);
-      console.log(`  DH2: EKa (sender ephemeral) || IKb (recipient identity)`);
-      console.log(`  DH3: EKa (sender ephemeral) || SPKb (recipient signed prekey)`);
-      if (oneTimePreKeyBuffer) {
-        console.log(`  DH4: EKa (sender ephemeral) || OPKb (one-time prekey) [INCLUDED]`);
-      } else {
-        console.log(`  DH4: SKIPPED (no OPK available)`);
-      }
-
-      const sharedSecret = X3DH.deriveSharedSecret(
-        senderIdentityPriv,
-        senderEphemeralPriv,
-        recipientBundle,
-        oneTimePreKeyBuffer
-      );
-
-      console.log(`\nShared Secret Generated (SHA-256):`);
-      console.log(`  ${sharedSecret.toString('hex').slice(0, 64)}...`);
-
-      const dr = new DoubleRatchet(sharedSecret);
-      const key = ratchetKey(data.from, data.to);
-      ratchets.set(key, dr);
-
-      console.log(`\nDouble Ratchet Initialized for session: ${key}`);
-
-      // בדיקה אם צריך להוסיף OPK חדשים
-      await replenishOneTimePreKeys(data.to);
-
-      console.log(`\n========================================`);
-      console.log(`  SESSION ESTABLISHED SUCCESSFULLY`);
-      console.log(`========================================`);
-      console.log(`Session: ${data.from} <-> ${data.to}`);
-      console.log(`Security Level: ${opk ? '4-DH (with OPK)' : '3-DH (without OPK)'}\n`);
-
-      cb && cb({ ok: true, usedOPK: !!opk });
+      cb && cb({ ok: true, bundle });
     } catch (err: any) {
-      console.error('ERROR: init-session failed', err);
+      console.error("get-prekey-bundle error", err);
       cb && cb({ ok: false, error: err.message });
     }
   });
 
-  
-  socket.on('send-message', async (data: { to: string; from: string; ciphertext: any }) => {
-    console.log(`📩 Encrypted packet received: ${data.from} -> ${data.to}`);
+  // Init Session - Deprecated/Relay Only
+  // The client now does X3DH. But the client sends "session-request" to the recipient
+  // to notify them of the ephemeral keys.
+  socket.on('session-request', (data: any) => {
+    // data: { to, from, senderIdentityKey, senderEphemeralKey, usedOneTimePreKeyId }
+    const targetSocketId = userSockets.get(data.to);
+    if (targetSocketId) {
+      io.to(targetSocketId).emit('session-request', data);
+    }
+  });
 
+  // שליחת הודעה: השרת רק מעביר את ה-Ciphertext
+  socket.on('send-message', async (data: { to: string; from: string; ciphertext: string }) => {
+    console.log('send-message (relay):', {
+      to: data.to,
+      from: data.from,
+      size: data.ciphertext.length
+    });
+
+    // שמירה ב-DB (מוצפן בלבד!)
     try {
+      const chatId = ratchetKey(data.from, data.to);
+      // Note: MessageSchema definition might need adjustment if we wanted to be strict,
+      // but 'ciphertext' isn't in standard schema shown in `db.ts` snippet?
+      // Wait, `MessageSchema` in `db.ts` was relying on dynamic mixed fields or just `plaintext`?
+      // `db.ts` snippet showed:
+      /*
+        const MessageSchema = new mongoose.Schema({
+            from: { type: String, required: true },
+            to: { type: String, required: true },
+            chatId: { type: String, required: true, index: true },
+            timestamp: { type: Date, default: Date.now }
+        });
+      */
+      // It allows flexible fields if strict: false? Or we need to add content field.
+      // Current `send-message` saved nothing about content in the snippet?
+      // Line 228 in `server/index.ts`:
+      /*
+      await MessageModel.create({
+       from: data.from,
+       to: data.to,
+       chatId,
+       timestamp: new Date()
+     });
+     */
+      // It wasn't saving the text at all in the provided snippet! Just metadata.
+      // I will assume we want to save the content now?
+      // Or just keep saving metadata.
+      // For E2EE, saving ciphertext is common for offline delivery.
+
+      // Let's add ciphertext storage if possible, but schema in db.ts doesn't have it.
+      // I will stick to metadata saving to avoid schema validation errors 
+      // UNLESS I update schema. I will update schema in next step if needed.
+      // For now, save metadata.
+
       await MessageModel.create({
         from: data.from,
         to: data.to,
-        
-        ciphertext: typeof data.ciphertext === 'object' ? JSON.stringify(data.ciphertext) : data.ciphertext,
-        chatId: ratchetKey(data.from, data.to),
+        ciphertext: data.ciphertext,
+        chatId,
         timestamp: new Date()
       });
+<<<<<<< HEAD
       console.log(`Encrypted message saved to DB`);
+=======
+
+>>>>>>> fb29cb553a2389e836ccc773a5a6a0f44025e6cc
     } catch (err) {
       console.error('Error saving message to DB:', err);
     }
 
-
+    // שליחת ההודעה למקבל
     const targetSocketId = userSockets.get(data.to);
     if (targetSocketId) {
       io.to(targetSocketId).emit('receive-message', {
         from: data.from,
-        ciphertext: data.ciphertext 
+        ciphertext: data.ciphertext
       });
-      console.log(`🚀 Forwarded encrypted packet to user ${data.to}`);
     } else {
-      console.warn(`⚠️ Target user ${data.to} is not connected (message stored in DB)`);
+      console.warn(`Target user ${data.to} is not connected`);
+      // Future: Store for offline delivery
     }
   });
 

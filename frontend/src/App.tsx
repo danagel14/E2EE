@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import ChatList from './components/ChatList'
 import ChatWindow from './components/ChatWindow'
 import ContactsModal from './components/ContactsModal'
@@ -55,6 +55,8 @@ function App() {
 
   // Double Ratchet instances לפענוח הודעות
   const [ratchets] = useState<Map<string, DoubleRatchet>>(new Map())
+  // Pending sessions promises to handle race conditions
+  const pendingSessions = React.useRef(new Map<string, Promise<void>>()).current;
 
   // איפוס צ'אטים והודעות כשמחליפים משתמש
   useEffect(() => {
@@ -62,52 +64,111 @@ function App() {
     setMessages([])
     setSelectedChat(null)
     ratchets.clear()
+    pendingSessions.clear()
   }, [myId])
 
 
   // --- האזנה להודעות נכנסות מהשרת והרשמה ---
   useEffect(() => {
-    socket.on('connect', () => {
+    socket.on('connect', async () => {
       console.log('Connected to Socket.IO server, id:', socket.id)
 
       // הרשמה לשרת עם ה-ID שלי
       socket.emit('register-session', myId)
 
-      // יצירת מפתחות קריפטוגרפיים אמיתיים בשרת
-      socket.emit('register-keys', { userId: myId }, (res: any) => {
-        if (res.ok) {
-          console.log('✅ Cryptographic keys registered for user', myId)
-        } else {
-          console.log('ℹ️', res.message || 'Keys registration response', res)
-        }
-      })
+      // יצירת מפתחות קריפטוגרפיים בדפדפן ושליחת Public Keys לשרת
+      try {
+        import('./crypto/keyManager').then(async ({ KeyManager }) => {
+          // Generate or load keys
+          const keys = await KeyManager.generateAndSaveKeys(myId);
+          if (keys) {
+            const publicBundle = KeyManager.getPublicBundle(keys);
+            socket.emit('register-keys', publicBundle, (res: any) => {
+              if (res.ok) {
+                console.log('✅ Public Keys registered for user', myId)
+              } else {
+                console.error('❌ Key registration failed', res)
+              }
+            })
+          }
+        });
+      } catch (e) {
+        console.error("Failed to initialize crypto keys", e);
+      }
     })
 
     socket.on('connect_error', (err) => {
       console.error('Socket.IO connection error:', err.message)
     })
 
-    const handleReceiveMessage = (data: any) => {
+    const handleReceiveMessage = async (data: any) => {
       const fromId = data.from as string
       const timestamp = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
 
       // פענוח ההודעה עם Double Ratchet
       const ratchetKey = [myId, fromId].sort().join('|')
-      let plaintext = data.ciphertext
+      let plaintext = data.ciphertext // Default fallback?
 
       let ratchet = ratchets.get(ratchetKey)
 
-      // אם אין ratchet, ליצור אחד (המקבל צריך גם ratchet!)
-      if (!ratchet) {
-        console.log('🔑 Creating receiver ratchet for', ratchetKey)
-        const demoSecret = `secret-${ratchetKey}`
-        ratchet = new DoubleRatchet(demoSecret)
-        ratchets.set(ratchetKey, ratchet)
+      // Check if a session handshake is currently in progress
+      if (!ratchet && pendingSessions.has(ratchetKey)) {
+        console.log(`Waiting for pending session handshake with ${fromId}...`);
+        try {
+          await pendingSessions.get(ratchetKey);
+          ratchet = ratchets.get(ratchetKey); // Try getting it again
+          console.log("Session handshake finished, proceeding with decryption.");
+        } catch (e) {
+          console.error("Pending session handshake failed", e);
+        }
       }
 
-      // פענוח ההודעה
-      plaintext = ratchet.decrypt(data.ciphertext)
-      console.log('✅ Decrypted message:', plaintext)
+      // If we don't have a ratchet session, we might be receiving the first message.
+      // But we need the Shared Secret established via X3DH first!
+      // In a real flow, the first message might carry the X3DH bundle or we fetch it.
+      // For this refactor, let's assume `init-session` was done if we sent it, 
+      // BUT if we are receiving, we might need to "Accept" the session.
+      // Ideally, the sender did X3DH against our PreKeys. They derived a secret.
+      // We need to derive the SAME secret using our Private Keys and their Public Ephemeral Key (if they sent it).
+
+      // SIMPLIFICATION FOR THIS STEP:
+      // The current server logic had `init-session` where Server did X3DH and set up `ratchets`.
+      // Now Client A does X3DH. Client A calculates Secret.
+      // Client A puts Secret into Ratchet.
+      // Client A sends message.
+      // Client B receives message. Client B *doesn't know the secret yet*!
+      // Client B needs: Sender's Identity Key + Sender's Ephemeral Key (from the message or handshake).
+      // 
+      // To make this work WITHOUT changing the protocol message format too much:
+      // We will perform the `init-session` (Handshake) as a separate socket event *initiated by the sender*.
+      // The sender will calculate the secret, AND send the necessary public keys to the recipient so THEY can calculate it too.
+      // 
+      // Let's implement `socket.on('session-established', ...)` or similar?
+      // Or better: The sender calculates secret. The sender sends "I am starting session" to B directly?
+      // 
+      // Let's stick to the current flow's style:
+      // `init-session` is currently C->S. 
+      // The Plan: "Client calls API to get recipient's Public Key Bundle."
+      // So Sender has Secret. Sender needs to tell Recipient "Here are my public values (Ephemeral Key) so you can derive the secret too".
+      // 
+      // We need to update `handleSendMessage` to transmit the Ephemeral Public Key used for X3DH to the recipient?
+      // Standard X3DH: Initial message contains (IdentityKey, EphemeralKey, PreKeyId used).
+      // 
+      // Let's modify `handleSendMessage` to do the Handshake if needed.
+
+      if (!ratchet) {
+        console.warn(`No active ratchet session for ${ratchetKey}. Message cannot be decrypted yet.`);
+        // In a real app we would queue this or trigger session rebuild.
+        plaintext = "[Encrypted Message - Session Not Established]";
+      } else {
+        try {
+          plaintext = await ratchet.decrypt(data.ciphertext);
+          console.log('✅ Decrypted message:', plaintext)
+        } catch (e) {
+          console.error("Decryption failed", e);
+          plaintext = "[Decryption Error]";
+        }
+      }
 
       // עדכון רשימת הצ׳אטים
       setChats(prevChats => {
@@ -134,7 +195,7 @@ function App() {
           chat.id === fromId
             ? {
               ...chat,
-              lastMessage: plaintext,  // הטקסט המפוענח!
+              lastMessage: plaintext,
               timestamp,
               unread: selectedChat === fromId ? chat.unread : chat.unread + 1,
             }
@@ -143,34 +204,100 @@ function App() {
       })
 
       // הוספת ההודעה לרשימת ההודעות
-      const incomingMessage: Message = {
+      setMessages(prev => [...prev, {
         id: Date.now().toString(),
         chatId: fromId,
-        text: plaintext,  // הטקסט המפוענח!
+        text: plaintext,
         sender: fromId,
         timestamp,
         isOwn: false,
-      }
-      setMessages(prev => [...prev, incomingMessage])
+      }])
     }
 
     socket.on('receive-message', handleReceiveMessage)
 
+    // Listen for incoming Handshake (X3DH) requests/info
+    socket.on('session-request', async (data: any) => {
+      // data: { from: string, senderIdentityKey: string, senderEphemeralKey: string, usedOneTimePreKeyId: number }
+      console.log("Incoming Session Request from", data.from);
+
+      const key = [myId, data.from].sort().join('|');
+
+      const sessionPromise = (async () => {
+        try {
+          const { KeyManager } = await import('./crypto/keyManager');
+          const { X3DH } = await import('./crypto/x3dh');
+          const { DoubleRatchet } = await import('./crypto/ratchet');
+          const { importPublicKey, importPrivateKey } = await import('./crypto/web-crypto-utils');
+
+          const myKeys = KeyManager.getKeys(myId);
+          if (!myKeys) return;
+
+          // Reconstruct the flow to derive the same secret.
+          const identityKeyPrivate = await importPrivateKey(myKeys.identityKey.priv);
+          const signedPreKeyPrivate = await importPrivateKey(myKeys.signedPreKey.priv);
+
+          let oneTimePreKeyPrivate: CryptoKey | null = null;
+          if (data.usedOneTimePreKeyId !== undefined && data.usedOneTimePreKeyId !== null) {
+            // Loose comparison in case of string/number mismatch
+            const opk = myKeys.oneTimePreKeys.find(k => k.id == data.usedOneTimePreKeyId);
+
+            if (opk) {
+              oneTimePreKeyPrivate = await importPrivateKey(opk.priv);
+            } else {
+              console.warn(`Used OPK ${data.usedOneTimePreKeyId} not found locally.`);
+            }
+          }
+
+          const senderIdentityKey = await importPublicKey(data.senderIdentityKey);
+          const senderEphemeralKey = await importPublicKey(data.senderEphemeralKey);
+
+          const sharedSecret = await X3DH.deriveSharedSecretReceiver(
+            identityKeyPrivate,
+            signedPreKeyPrivate,
+            oneTimePreKeyPrivate,
+            senderIdentityKey,
+            senderEphemeralKey
+          );
+
+          const dr = new DoubleRatchet();
+          await dr.init(sharedSecret);
+          ratchets.set(key, dr);
+          console.log("✅ Session established (Receiver side) with", data.from);
+
+        } catch (e) {
+          console.error("Failed to establish session (Receiver)", e);
+        }
+      })();
+
+      pendingSessions.set(key, sessionPromise);
+
+      // Clean up after done
+      sessionPromise.finally(() => {
+        if (pendingSessions.get(key) === sessionPromise) {
+          pendingSessions.delete(key);
+        }
+      });
+    });
+
     // אם כבר מחוברים והמשתמש השתנה – לרשום אותו מחדש
     if (socket.connected) {
       socket.emit('register-session', myId)
-
-      socket.emit('register-keys', { userId: myId }, (res: any) => {
-        if (res.ok) {
-          console.log('✅ Keys registered/verified for user', myId)
+      // Key registration repeated...
+      import('./crypto/keyManager').then(async ({ KeyManager }) => {
+        const keys = await KeyManager.generateAndSaveKeys(myId);
+        if (keys) {
+          const publicBundle = KeyManager.getPublicBundle(keys);
+          socket.emit('register-keys', publicBundle, (res: any) => { })
         }
-      })
+      });
     }
 
     return () => {
       socket.off('connect')
       socket.off('connect_error')
       socket.off('receive-message', handleReceiveMessage)
+      socket.off('session-request')
     }
   }, [myId, selectedChat]);
 
@@ -201,7 +328,7 @@ function App() {
   }
 
   // --- לוגיקה מעודכנת: שליחת הודעה עם Socket.io ---
-  const handleSendMessage = (text: string) => {
+  const handleSendMessage = async (text: string) => {
     if (!selectedChat || !text.trim()) return
 
     const newMessage: Message = {
@@ -213,40 +340,90 @@ function App() {
       isOwn: true
     }
 
-    // יצירת ratchet בצד הקליינט לפני שליחת ההודעה
+    // Check if we have a ratchet session
     const ratchetKey = [myId, selectedChat].sort().join('|')
-    if (!ratchets.has(ratchetKey)) {
-      // בפועל צריך לקבל shared secret מ-X3DH, אבל לדמו נשתמש במפתח פשוט
-      const demoSecret = `secret-${ratchetKey}`
-      ratchets.set(ratchetKey, new DoubleRatchet(demoSecret))
-      console.log('✅ Created client ratchet for', ratchetKey)
-    }
+    let dr = ratchets.get(ratchetKey);
 
-    // בקשה ל-init-session ושליחת ההודעה רק אחרי אתחול
-    socket.emit('init-session', { from: myId, to: selectedChat }, (res: any) => {
-      console.log('init-session result', res)
+    try {
+      if (!dr) {
+        console.log("Initiating new session with", selectedChat);
 
-      const r = ratchets.get([myId, selectedChat].sort().join('|'))
-      // אם יש מפתח מצפינים, אחרת שולחים רגיל (רק ליתר ביטחון)
-      const encrypted = r ? r.encrypt(text.trim()) : text.trim()
-      // שליחת טקסט גלוי – השרת יבצע "הצפנה" בסיסית
+        // 1. Fetch PreKey Bundle from Server
+        const bundlePromise = new Promise<any>((resolve, reject) => {
+          socket.emit('get-prekey-bundle', { userId: selectedChat }, (res: any) => {
+            if (res.ok) resolve(res.bundle);
+            else reject(res.error);
+          });
+        });
+
+        const recipientBundle = await bundlePromise;
+        console.log("Got bundle:", recipientBundle);
+
+        // 2. Perform X3DH (Client Side)
+        const { KeyManager } = await import('./crypto/keyManager');
+        const { X3DH } = await import('./crypto/x3dh');
+        const { DoubleRatchet } = await import('./crypto/ratchet');
+
+        const myKeys = KeyManager.getKeys(myId);
+        if (!myKeys) throw new Error("My keys not found");
+
+        const { importPrivateKey } = await import('./crypto/web-crypto-utils');
+        const myIdentityPriv = await importPrivateKey(myKeys.identityKey.priv);
+
+        // Generate Ephemeral Key for this session
+        const ephemeralKeyPair = await window.crypto.subtle.generateKey(
+          { name: "ECDH", namedCurve: "P-256" }, true, ["deriveKey", "deriveBits"]
+        ) as CryptoKeyPair;
+
+        const { sharedSecret } = await X3DH.deriveSharedSecret(
+          myIdentityPriv,
+          ephemeralKeyPair.privateKey,
+          recipientBundle
+        );
+
+        // 3. Initialize Ratchet
+        dr = new DoubleRatchet();
+        await dr.init(sharedSecret);
+        ratchets.set(ratchetKey, dr);
+
+        // 4. Send "Session Request" / "Handshake" message to Recipient
+        const { exportPublicKey } = await import('./crypto/web-crypto-utils');
+        const ephemeralPublicBase64 = await exportPublicKey(ephemeralKeyPair.publicKey);
+
+        socket.emit('session-request', {
+          to: selectedChat,
+          from: myId,
+          senderIdentityKey: myKeys.identityKey.pub,
+          senderEphemeralKey: ephemeralPublicBase64,
+          usedOneTimePreKeyId: recipientBundle.oneTimePreKeyId ?? null // Fix: 0 is falsy, use ?? null
+        });
+      }
+
+      // Encrypt
+      const ciphertext = await dr.encrypt(text.trim());
+
+      // Send
       socket.emit('send-message', {
         to: selectedChat,
         from: myId,
-        ciphertext: encrypted, 
-        // plaintext: text.trim(), // (מחקנו את השורה הזו)
-      })
-    })
+        ciphertext: ciphertext
+      });
 
-    setMessages(prev => [...prev, newMessage])
+      // Update UI only after successful send
+      setMessages(prev => [...prev, newMessage])
 
-    const selectedChatData = chats.find(c => c.id === selectedChat)
-    if (selectedChatData) {
-      setChats(chats.map(chat =>
-        chat.id === selectedChat
-          ? { ...chat, lastMessage: text.trim(), timestamp: newMessage.timestamp }
-          : chat
-      ))
+      const selectedChatData = chats.find(c => c.id === selectedChat)
+      if (selectedChatData) {
+        setChats(chats.map(chat =>
+          chat.id === selectedChat
+            ? { ...chat, lastMessage: text.trim(), timestamp: newMessage.timestamp }
+            : chat
+        ))
+      }
+
+    } catch (e) {
+      console.error("Failed to send message", e);
+      alert("Encrypted session failed: " + e);
     }
   }
 

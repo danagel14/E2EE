@@ -1,14 +1,15 @@
 
 
+
 export class KeyPair {
-  constructor(public publicKey: Buffer, public privateKey: Buffer) { }
+  constructor(public publicKey: Uint8Array, public privateKey: Uint8Array) { }
 }
 
 export class KeyBundle {
   constructor(
-    public identityKey: Buffer,
-    public signedPreKey: Buffer,
-    public signedPreKeySignature: Buffer,
-    public oneTimePreKeys: Buffer[] = []
+    public identityKey: Uint8Array,
+    public signedPreKey: Uint8Array,
+    public signedPreKeySignature: Uint8Array,
+    public oneTimePreKeys: Uint8Array[] = []
   ) { }
 }

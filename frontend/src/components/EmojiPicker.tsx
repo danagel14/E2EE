@@ -8,7 +8,7 @@ interface EmojiPickerProps {
 
 const emojis = ['😊', '😂', '❤️', '👍', '👎', '🎉', '🔥', '💯', '😍', '😢', '🤔', '👏']
 
-const EmojiPicker: React.FC<EmojiPickerProps> = ({ onSelectEmoji, onClose }) => {
+const EmojiPicker: React.FC<EmojiPickerProps> = ({ onSelectEmoji }) => {
   const handleEmojiClick = (emoji: string) => {
     onSelectEmoji(emoji)
   }

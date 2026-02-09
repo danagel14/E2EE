@@ -1,41 +1,117 @@
-import mongoose from 'mongoose';
+// In-Memory Storage for E2EE Keys (No MongoDB required for testing)
+// This allows testing X3DH without installing MongoDB
 
-const UserSchema = new mongoose.Schema({
-  userId: { type: String, unique: true, required: true },
+interface UserKeys {
+  userId: string;
+  identityKeyPublic: string;
+  identityKeyPrivate: string;
+  signedPreKeyId: number;
+  signedPreKeyPublic: string;
+  signedPreKeyPrivate: string;
+  signedPreKeySignature: string;
+  oneTimePreKeys: Array<{
+    keyId: number;
+    publicKey: string;
+    privateKey: string;
+    used: boolean;
+  }>;
+}
 
-  // Identity Key (IK) - long-term key pair
-  identityKeyPublic: { type: String, required: true },
-  identityKeyPrivate: { type: String, required: true },
+interface Message {
+  from: string;
+  to: string;
+  chatId: string;
+  content?: string;
+  timestamp: Date;
+}
 
-  // Signed Pre Key (SPK) - medium-term key pair
-  signedPreKeyId: { type: Number, required: true },
-  signedPreKeyPublic: { type: String, required: true },
-  signedPreKeyPrivate: { type: String, required: true },
-  signedPreKeySignature: { type: String, required: true },
+class InMemoryStore {
+  private users: Map<string, UserKeys> = new Map();
+  private messages: Message[] = [];
 
-  // One-Time Pre Keys (OPK) - single-use key pairs
-  oneTimePreKeys: [{
-    keyId: { type: Number, required: true },
-    publicKey: { type: String, required: true },
-    privateKey: { type: String, required: true },
-    used: { type: Boolean, default: false }
-  }]
-});
+  // User methods
+  async findUserByUserId(userId: string): Promise<UserKeys | null> {
+    return this.users.get(userId) || null;
+  }
 
-export const UserModel = mongoose.model('User', UserSchema);
+  async upsertUser(userId: string, keys: Partial<UserKeys>): Promise<UserKeys> {
+    const existing = this.users.get(userId);
+    const updated: UserKeys = {
+      userId,
+      identityKeyPublic: keys.identityKeyPublic || existing?.identityKeyPublic || '',
+      identityKeyPrivate: keys.identityKeyPrivate || existing?.identityKeyPrivate || '',
+      signedPreKeyId: keys.signedPreKeyId ?? existing?.signedPreKeyId ?? 0,
+      signedPreKeyPublic: keys.signedPreKeyPublic || existing?.signedPreKeyPublic || '',
+      signedPreKeyPrivate: keys.signedPreKeyPrivate || existing?.signedPreKeyPrivate || ''!,
+      signedPreKeySignature: keys.signedPreKeySignature || existing?.signedPreKeySignature || '',
+      oneTimePreKeys: keys.oneTimePreKeys || existing?.oneTimePreKeys || []
+    };
+    this.users.set(userId, updated);
+    return updated;
+  }
 
-// סכמה להודעות
-const MessageSchema = new mongoose.Schema({
-  from: { type: String, required: true },
-  to: { type: String, required: true },
-  chatId: { type: String, required: true, index: true },
-  timestamp: { type: Date, default: Date.now }
-});
+  async updateUserOPKs(userId: string, oneTimePreKeys: UserKeys['oneTimePreKeys']): Promise<UserKeys | null> {
+    const user = this.users.get(userId);
+    if (!user) return null;
+    user.oneTimePreKeys = oneTimePreKeys;
+    this.users.set(userId, user);
+    return user;
+  }
 
-export const MessageModel = mongoose.model('Message', MessageSchema);
+  // Message methods
+  async saveMessage(message: Omit<Message, 'timestamp'>): Promise<Message> {
+    const msg: Message = {
+      ...message,
+      timestamp: new Date()
+    };
+    this.messages.push(msg);
+    return msg;
+  }
+
+  async getMessagesByChatId(chatId: string): Promise<Message[]> {
+    return this.messages
+      .filter(m => m.chatId === chatId)
+      .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  }
+
+  // Utility
+  clear() {
+    this.users.clear();
+    this.messages = [];
+  }
+
+  listUsers(): string[] {
+    return Array.from(this.users.keys());
+  }
+}
+
+export const store = new InMemoryStore();
+
+// Mock Mongoose models that use the in-memory store
+export const UserModel = {
+  findOne: async ({ userId }: { userId: string }) => {
+    return await store.findUserByUserId(userId);
+  },
+  findOneAndUpdate: async (
+    { userId }: { userId: string },
+    update: any,
+    options: any
+  ) => {
+    return await store.upsertUser(userId, update);
+  }
+};
+
+export const MessageModel = {
+  create: async (data: Omit<Message, 'timestamp'>) => {
+    return await store.saveMessage(data);
+  },
+  find: async ({ chatId }: { chatId: string }) => {
+    return await store.getMessagesByChatId(chatId);
+  }
+};
 
 export const connectDB = async () => {
-  const uri = process.env.MONGO_URL || 'mongodb://localhost:27017/signal_db';
-  await mongoose.connect(uri);
-  console.log("MongoDB Connected:", uri);
+  console.log('✅ Using in-memory storage (MongoDB not required for testing)');
+  console.log('💡 Keys and messages will be stored in memory');
+  return Promise.resolve();
 };

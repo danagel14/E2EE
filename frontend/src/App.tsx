@@ -1,14 +1,16 @@
-import { useState, useEffect } from 'react'
+
+import { useState, useEffect, useRef } from 'react'
 import ChatList from './components/ChatList'
 import ChatWindow from './components/ChatWindow'
 import ContactsModal from './components/ContactsModal'
-import { DoubleRatchet } from './crypto/ratchet'
+import { KeyManager } from './crypto/KeyManager'
+import { Protocol } from './crypto/Protocol'
 import './App.css'
 
 // חיבור לשרת (וודא שהשרת רץ על פורט 3001)
-import { io } from 'socket.io-client'
+import { io, Socket } from 'socket.io-client'
 
-const socket = io('http://localhost:3001', {
+const socket: Socket = io('http://localhost:3001', {
   transports: ['websocket', 'polling'],
 })
 
@@ -53,15 +55,34 @@ function App() {
   // זהות המשתמש הנוכחי – ניתנת לבחירה מה-UI
   const [myId, setMyId] = useState<string>('4')
 
-  // Double Ratchet instances לפענוח הודעות
-  const [ratchets] = useState<Map<string, DoubleRatchet>>(new Map())
+  // Protocol & KeyManager refs to persist across renders
+  const keyManagerRef = useRef<KeyManager | null>(null)
+  const protocolRef = useRef<Protocol | null>(null)
 
   // איפוס צ'אטים והודעות כשמחליפים משתמש
   useEffect(() => {
     setChats([])
     setMessages([])
     setSelectedChat(null)
-    ratchets.clear()
+
+    // Init crypto for new user
+    const km = new KeyManager(myId);
+    const proto = new Protocol(km);
+    keyManagerRef.current = km;
+    protocolRef.current = proto;
+
+    // Ensure keys exist and register with server
+    km.ensureKeysExist().then(async (justGenerated) => {
+      if (justGenerated || socket.connected) {
+        // Upload keys
+        const bundle = km.getPublicKeyBundle();
+        socket.emit('register-keys', bundle, (res: any) => {
+          if (res.ok) console.log('✅ Keys uploaded to server');
+          else console.error('❌ Failed to upload keys', res);
+        });
+      }
+    });
+
   }, [myId])
 
 
@@ -73,40 +94,40 @@ function App() {
       // הרשמה לשרת עם ה-ID שלי
       socket.emit('register-session', myId)
 
-      // יצירת מפתחות קריפטוגרפיים אמיתיים בשרת
-      socket.emit('register-keys', { userId: myId }, (res: any) => {
-        if (res.ok) {
-          console.log('✅ Cryptographic keys registered for user', myId)
-        } else {
-          console.log('ℹ️', res.message || 'Keys registration response', res)
-        }
-      })
+      // Upload keys if we have them
+      if (keyManagerRef.current) {
+        const bundle = keyManagerRef.current.getPublicKeyBundle();
+        socket.emit('register-keys', bundle);
+      }
     })
 
     socket.on('connect_error', (err) => {
       console.error('Socket.IO connection error:', err.message)
     })
 
-    const handleReceiveMessage = (data: any) => {
+    // Handle incoming session requests (X3DH Init)
+    socket.on('session-request', async (data: any) => {
+      // data: { from, senderIdentityKey, senderEphemeralKey, ... }
+      console.log('Received session request from', data.from);
+      if (protocolRef.current) {
+        await protocolRef.current.handleSessionRequest(data);
+      }
+    });
+
+    const handleReceiveMessage = async (data: any) => {
       const fromId = data.from as string
       const timestamp = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
 
-      // פענוח ההודעה עם Double Ratchet
-      const ratchetKey = [myId, fromId].sort().join('|')
-      let plaintext = data.ciphertext
-
-      let ratchet = ratchets.get(ratchetKey)
-
-      // אם אין ratchet, ליצור אחד (המקבל צריך גם ratchet!)
-      if (!ratchet) {
-        console.log('🔑 Creating receiver ratchet for', ratchetKey)
-        const demoSecret = `secret-${ratchetKey}`
-        ratchet = new DoubleRatchet(demoSecret)
-        ratchets.set(ratchetKey, ratchet)
+      let plaintext = '[Encrypted Message]';
+      if (protocolRef.current) {
+        try {
+          plaintext = await protocolRef.current.decryptMessage(fromId, myId, data.ciphertext);
+        } catch (e) {
+          console.error('Decryption error:', e);
+          plaintext = '[Decryption Failed]';
+        }
       }
 
-      // פענוח ההודעה
-      plaintext = ratchet.decrypt(data.ciphertext)
       console.log('✅ Decrypted message:', plaintext)
 
       // עדכון רשימת הצ׳אטים
@@ -123,7 +144,7 @@ function App() {
               id: contact.id,
               name: contact.name,
               avatar: contact.avatar,
-              lastMessage: plaintext,  // הטקסט המפוענח!
+              lastMessage: plaintext,
               timestamp,
               unread: 1,
             },
@@ -134,7 +155,7 @@ function App() {
           chat.id === fromId
             ? {
               ...chat,
-              lastMessage: plaintext,  // הטקסט המפוענח!
+              lastMessage: plaintext,
               timestamp,
               unread: selectedChat === fromId ? chat.unread : chat.unread + 1,
             }
@@ -146,7 +167,7 @@ function App() {
       const incomingMessage: Message = {
         id: Date.now().toString(),
         chatId: fromId,
-        text: plaintext,  // הטקסט המפוענח!
+        text: plaintext,
         sender: fromId,
         timestamp,
         isOwn: false,
@@ -159,20 +180,23 @@ function App() {
     // אם כבר מחוברים והמשתמש השתנה – לרשום אותו מחדש
     if (socket.connected) {
       socket.emit('register-session', myId)
-
-      socket.emit('register-keys', { userId: myId }, (res: any) => {
-        if (res.ok) {
-          console.log('✅ Keys registered/verified for user', myId)
-        }
-      })
+      if (keyManagerRef.current) {
+        /* 
+           We might re-upload, but optimization: 
+           only if needed. For now, innocent re-upload is fine. 
+        */
+        const bundle = keyManagerRef.current.getPublicKeyBundle();
+        socket.emit('register-keys', bundle);
+      }
     }
 
     return () => {
       socket.off('connect')
       socket.off('connect_error')
+      socket.off('session-request')
       socket.off('receive-message', handleReceiveMessage)
     }
-  }, [myId, selectedChat]);
+  }, [myId, selectedChat]); // Removed `ratchets` dependency as it's now in ref
 
   const handleSelectChat = (chatId: string) => {
     setSelectedChat(chatId)
@@ -201,8 +225,9 @@ function App() {
   }
 
   // --- לוגיקה מעודכנת: שליחת הודעה עם Socket.io ---
-  const handleSendMessage = (text: string) => {
+  const handleSendMessage = async (text: string) => {
     if (!selectedChat || !text.trim()) return
+    if (!protocolRef.current) return;
 
     const newMessage: Message = {
       id: Date.now().toString(),
@@ -213,36 +238,37 @@ function App() {
       isOwn: true
     }
 
-    // יצירת ratchet בצד הקליינט לפני שליחת ההודעה
-    const ratchetKey = [myId, selectedChat].sort().join('|')
-    if (!ratchets.has(ratchetKey)) {
-      // בפועל צריך לקבל shared secret מ-X3DH, אבל לדמו נשתמש במפתח פשוט
-      const demoSecret = `secret-${ratchetKey}`
-      ratchets.set(ratchetKey, new DoubleRatchet(demoSecret))
-      console.log('✅ Created client ratchet for', ratchetKey)
-    }
+    try {
+      // Ensure session exists
+      if (!protocolRef.current.hasSession(selectedChat, myId)) {
+        console.log('Orchestrating X3DH handshake...');
+        await protocolRef.current.initSessionAsSender(selectedChat, myId, 'http://localhost:3001', socket);
+      }
 
-    // בקשה ל-init-session ושליחת ההודעה רק אחרי אתחול
-    socket.emit('init-session', { from: myId, to: selectedChat }, (res: any) => {
-      console.log('init-session result', res)
+      // Encrypt
+      const ciphertext = await protocolRef.current.encryptMessage(selectedChat, myId, text.trim());
 
-      // שליחת טקסט גלוי – השרת יבצע "הצפנה" בסיסית
+      // Send
       socket.emit('send-message', {
         to: selectedChat,
         from: myId,
-        plaintext: text.trim(),
+        ciphertext: ciphertext,
       })
-    })
 
-    setMessages(prev => [...prev, newMessage])
+      setMessages(prev => [...prev, newMessage])
 
-    const selectedChatData = chats.find(c => c.id === selectedChat)
-    if (selectedChatData) {
-      setChats(chats.map(chat =>
-        chat.id === selectedChat
-          ? { ...chat, lastMessage: text.trim(), timestamp: newMessage.timestamp }
-          : chat
-      ))
+      const selectedChatData = chats.find(c => c.id === selectedChat)
+      if (selectedChatData) {
+        setChats(chats.map(chat =>
+          chat.id === selectedChat
+            ? { ...chat, lastMessage: text.trim(), timestamp: newMessage.timestamp }
+            : chat
+        ))
+      }
+
+    } catch (e) {
+      console.error('Failed to send message:', e);
+      alert('Failed to send secure message. Check console.');
     }
   }
 
@@ -291,8 +317,8 @@ function App() {
         ) : (
           <div className="empty-chat">
             <div className="empty-chat-content">
-              <h2>CipherChat</h2>
-              <p>בחר צ'אט כדי להתחיל לשוחח</p>
+              <h2>CipherChat - E2EE</h2>
+              <p>בחר צ'אט כדי להתחיל לשוחח באופן מאובטח</p>
             </div>
           </div>
         )}

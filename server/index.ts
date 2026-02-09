@@ -209,9 +209,9 @@ io.on('connection', (socket) => {
         chatId: ratchetKey(data.from, data.to),
         timestamp: new Date()
       });
-      console.log(`✅ Encrypted message saved to DB`);
+      console.log(`Encrypted message saved to DB`);
     } catch (err) {
-      console.error('❌ Error saving message to DB:', err);
+      console.error('Error saving message to DB:', err);
     }
 
 

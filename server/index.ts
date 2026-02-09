@@ -223,11 +223,6 @@ io.on('connection', (socket) => {
         chatId,
         timestamp: new Date()
       });
-<<<<<<< HEAD
-      console.log(`Encrypted message saved to DB`);
-=======
-
->>>>>>> fb29cb553a2389e836ccc773a5a6a0f44025e6cc
     } catch (err) {
       console.error('Error saving message to DB:', err);
     }

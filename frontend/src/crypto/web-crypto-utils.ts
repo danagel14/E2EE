@@ -52,7 +52,7 @@ export async function importPublicKey(base64Key: string): Promise<CryptoKey> {
             namedCurve: "P-256", // Using P-256 as in server
         },
         true,
-        [] // Public keys don't need usages for import usually, but for ECDH we might need none or deriveKey
+        []
     );
 }
 
@@ -68,5 +68,53 @@ export async function importPrivateKey(base64Key: string): Promise<CryptoKey> {
         },
         true,
         ["deriveKey", "deriveBits"]
+    );
+}
+
+// HKDF Implementation (RFC 5869)
+// Salt, IKM, Info are ArrayBuffers. Length is in Bytes.
+export async function hkdf(
+    salt: ArrayBuffer,
+    ikm: ArrayBuffer,
+    info: ArrayBuffer,
+    length: number
+): Promise<ArrayBuffer> {
+    // 1. Import IKM (Input Keying Material)
+    const ikmKey = await window.crypto.subtle.importKey(
+        "raw",
+        ikm,
+        { name: "HKDF" },
+        false,
+        ["deriveBits"]
+    );
+
+    // 2. Derive Bits
+    return window.crypto.subtle.deriveBits(
+        {
+            name: "HKDF",
+            hash: "SHA-256",
+            salt: salt,
+            info: info
+        },
+        ikmKey,
+        length * 8 // Length in bits
+    );
+}
+
+// Export symmetric key (AES-GCM)
+export async function exportSymmetricKey(key: CryptoKey): Promise<string> {
+    const exported = await window.crypto.subtle.exportKey("raw", key);
+    return arrayBufferToBase64(exported);
+}
+
+// Import symmetric key (AES-GCM)
+export async function importSymmetricKey(base64Key: string): Promise<CryptoKey> {
+    const binaryKey = base64ToArrayBuffer(base64Key);
+    return window.crypto.subtle.importKey(
+        "raw",
+        binaryKey,
+        { name: "AES-GCM" },
+        true,
+        ["encrypt", "decrypt"]
     );
 }

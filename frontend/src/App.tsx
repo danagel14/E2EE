@@ -63,7 +63,37 @@ function App() {
     setMessages([])
     setSelectedChat(null)
     ratchets.clear()
+
+    // Load ratchets from localStorage
+    const loadRatchets = async () => {
+      const stored = localStorage.getItem(`ratchets_${myId}`);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          for (const key in parsed) {
+            // dynamic import DoubleRatchet to avoid circular dep issues if any, 
+            // though standard import at top should work. 
+            // But we can just use the class since it's imported.
+            const dr = new DoubleRatchet();
+            await dr.deserialize(parsed[key]);
+            ratchets.set(key, dr);
+          }
+          console.log(`Loaded ${ratchets.size} sessions from storage for user ${myId}`);
+        } catch (e) {
+          console.error("Failed to load ratchets", e);
+        }
+      }
+    };
+    loadRatchets();
   }, [myId])
+
+  const saveRatchets = async () => {
+    const serializedMap: { [key: string]: string } = {};
+    for (const [key, ratchet] of ratchets.entries()) {
+      serializedMap[key] = await ratchet.serialize();
+    }
+    localStorage.setItem(`ratchets_${myId}`, JSON.stringify(serializedMap));
+  };
 
 
   // Listen for incoming messages from the server and registration
@@ -152,8 +182,9 @@ function App() {
             );
 
             ratchet = new DoubleRatchet();
-            await ratchet.init(sharedSecret);
+            await ratchet.init(sharedSecret, 'responder');
             ratchets.set(ratchetKey, ratchet);
+            await saveRatchets(); // Save state after new session
             console.log("✅ Session established from PreKeyMessage");
 
             ciphertextToDecrypt = payload.ciphertext;
@@ -165,6 +196,7 @@ function App() {
           plaintext = "[Encrypted Message - Session Missing]";
         } else {
           plaintext = await ratchet.decrypt(ciphertextToDecrypt);
+          await saveRatchets(); // Save state after decrypt
           console.log('✅ Decrypted message:', plaintext)
         }
 
@@ -322,11 +354,13 @@ function App() {
 
         // 3. Initialize Ratchet
         dr = new DoubleRatchet();
-        await dr.init(sharedSecret);
+        await dr.init(sharedSecret, 'initiator');
         ratchets.set(ratchetKey, dr);
+        await saveRatchets(); // Save state after init
 
         // Encrypt message
         const encrypted = await dr.encrypt(text.trim());
+        await saveRatchets(); // Save state after first encrypt
 
         // 4. Bundle handshake payload (PreKeyMessage)
         const { exportPublicKey } = await import('./crypto/web-crypto-utils');
@@ -346,6 +380,7 @@ function App() {
       } else {
         // Normal message
         finalCiphertext = await dr.encrypt(text.trim());
+        await saveRatchets(); // Save state after encrypt
       }
 
       // Send

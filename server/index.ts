@@ -4,13 +4,11 @@ import mongoose from 'mongoose';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { UserModel, MessageModel } from './db.js';
-import { X3DH } from '../crypto/X3DH.js';
 import { DoubleRatchet } from '../crypto/ratchet.js';
-import { generateUserKeys, consumeOneTimePreKey, getUserKeyBundle, replenishOneTimePreKeys } from './keyManagement.js';
 
 const app = express();
 
-// לאפשר חיבורים גם מ-5173 (Vite) וגם מ-3000 (למשל CRA) ועוד פורטים בזמן פיתוח
+// Enable connections from multiple origins (e.g., Vite, CRA, etc.)
 app.use(cors({
   origin: [
     'http://localhost:5173',
@@ -24,7 +22,7 @@ app.use(cors({
 
 app.use(express.json());
 
-// שימוש במשתנה סביבה אם קיים (למשל בדוקר), אחרת ברירת מחדל ל-localhost
+// Use environment variable if available (e.g., Docker), otherwise default to localhost
 const MONGO_URI = process.env.MONGO_URL || 'mongodb://localhost:27017/signal_db';
 
 mongoose.connect(MONGO_URI)
@@ -38,7 +36,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// יצירת HTTP server ו"הרכבת" Socket.IO עליו
+// Create HTTP server and "mount" Socket.IO on it
 const httpServer = http.createServer(app);
 
 const io = new SocketIOServer(httpServer, {
@@ -52,10 +50,10 @@ const io = new SocketIOServer(httpServer, {
   },
 });
 
-// מיפוי userId -> socket.id (פשוט, בזיכרון)
+// userId -> socket.id mapping (simple, in memory)
 const userSockets = new Map<string, string>();
 
-// מצב Ratchet בזיכרון: "userA|userB" -> DoubleRatchet
+// Ratchet state in memory: "userA|userB" -> DoubleRatchet
 const ratchets = new Map<string, DoubleRatchet>();
 
 function ratchetKey(a: string, b: string) {
@@ -65,7 +63,7 @@ function ratchetKey(a: string, b: string) {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  // רישום session לפי userId
+  // Register session by userId
   socket.on('register-session', (userId: string) => {
     console.log(`User registered session: ${userId} -> ${socket.id}`);
 
@@ -83,9 +81,30 @@ io.on('connection', (socket) => {
       console.log(`  User ${uid}: ${sid}`);
     }
     console.log('-----------------------');
+
+    // Deliver all pending (offline) messages
+    (async () => {
+      try {
+        const pendingMessages = await MessageModel.find({ to: userId, delivered: false }).sort({ timestamp: 1 });
+        if (pendingMessages.length > 0) {
+          console.log(`Delivering ${pendingMessages.length} pending messages to ${userId}`);
+          for (const msg of pendingMessages) {
+            socket.emit('receive-message', {
+              from: msg.from,
+              ciphertext: msg.ciphertext,
+              timestamp: msg.timestamp
+            });
+            msg.delivered = true;
+            await msg.save();
+          }
+        }
+      } catch (err) {
+        console.error('Error delivering pending messages:', err);
+      }
+    })();
   });
 
-  // רישום Bundle של מפתחות ציבוריים מהקליינט
+  // Register public keys bundle from client
   socket.on('register-keys', async (data: any, cb?: (res: any) => void) => {
     try {
       const { userId, identityKeyPublic, signedPreKeyId, signedPreKeyPublic, signedPreKeySignature, oneTimePreKeys } = data;
@@ -95,7 +114,7 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // שמירה/עדכון ב-DB (רק מפתחות ציבוריים!)
+      // Save/Update in DB (only public keys!)
       await UserModel.findOneAndUpdate(
         { userId },
         {
@@ -117,7 +136,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // קבלת PreKey Bundle עבור משתמש אחר (כדי להתחיל X3DH בקליינט)
+  // Get PreKey Bundle for another user (to start X3DH in client)
   socket.on('get-prekey-bundle', async (data: { userId: string }, cb?: (res: any) => void) => {
     try {
       const user = await UserModel.findOne({ userId: data.userId });
@@ -125,15 +144,6 @@ io.on('connection', (socket) => {
         cb && cb({ ok: false, error: 'User not found' });
         return;
       }
-
-      // מציאת OPK זמין
-      // Atomic update to mark as available?
-      // For concurrent safety we should findOneAndUpdate.
-      // Note: Since we removed private keys, we can't "consume" it in the same way (returning priv key), 
-      // but we still mark it used so others don't use it.
-
-      // However, to get the value to return, we first need to find it.
-      // Better: Find an unused one, mark as used, return it.
 
       const availableOPK = user.oneTimePreKeys.find((key: any) => !key.used);
 
@@ -161,11 +171,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Init Session - Deprecated/Relay Only
-  // The client now uses PreKeyMessage to bundle the handshake with the first message.
-  // socket.on('session-request', ...) removed.
-
-  // שליחת הודעה: השרת רק מעביר את ה-Ciphertext
+  // Send message: Server only relays the Ciphertext
   socket.on('send-message', async (data: { to: string; from: string; ciphertext: string }) => {
     console.log('send-message (relay):', {
       to: data.to,
@@ -173,63 +179,35 @@ io.on('connection', (socket) => {
       size: data.ciphertext.length
     });
 
-    // שמירה ב-DB (מוצפן בלבד!)
+    const targetSocketId = userSockets.get(data.to);
+    const isOnline = !!targetSocketId;
+
+    // Save in DB (only ciphertext!)
     try {
       const chatId = ratchetKey(data.from, data.to);
-      // Note: MessageSchema definition might need adjustment if we wanted to be strict,
-      // but 'ciphertext' isn't in standard schema shown in `db.ts` snippet?
-      // Wait, `MessageSchema` in `db.ts` was relying on dynamic mixed fields or just `plaintext`?
-      // `db.ts` snippet showed:
-      /*
-        const MessageSchema = new mongoose.Schema({
-            from: { type: String, required: true },
-            to: { type: String, required: true },
-            chatId: { type: String, required: true, index: true },
-            timestamp: { type: Date, default: Date.now }
-        });
-      */
-      // It allows flexible fields if strict: false? Or we need to add content field.
-      // Current `send-message` saved nothing about content in the snippet?
-      // Line 228 in `server/index.ts`:
-      /*
-      await MessageModel.create({
-       from: data.from,
-       to: data.to,
-       chatId,
-       timestamp: new Date()
-     });
-     */
-      // It wasn't saving the text at all in the provided snippet! Just metadata.
-      // I will assume we want to save the content now?
-      // Or just keep saving metadata.
-      // For E2EE, saving ciphertext is common for offline delivery.
-
-      // Let's add ciphertext storage if possible, but schema in db.ts doesn't have it.
-      // I will stick to metadata saving to avoid schema validation errors 
-      // UNLESS I update schema. I will update schema in next step if needed.
-      // For now, save metadata.
-
       await MessageModel.create({
         from: data.from,
         to: data.to,
         ciphertext: data.ciphertext,
         chatId,
-        timestamp: new Date()
+        timestamp: new Date(),
+        delivered: isOnline
       });
+      console.log(`Message saved to DB. ID: ${chatId}, Delivered: ${isOnline}`);
     } catch (err) {
       console.error('Error saving message to DB:', err);
     }
 
-    // שליחת ההודעה למקבל
-    const targetSocketId = userSockets.get(data.to);
+    // Send message to recipient immediately if online
     if (targetSocketId) {
+      console.log(`Delivering immediately to ${data.to} (Socket: ${targetSocketId})`);
       io.to(targetSocketId).emit('receive-message', {
         from: data.from,
         ciphertext: data.ciphertext
       });
     } else {
-      console.warn(`Target user ${data.to} is not connected`);
-      // Future: Store for offline delivery
+      console.log(`Target user ${data.to} is offline. Message saved for later delivery.`);
+      console.log('Current User Sockets:', Array.from(userSockets.entries()));
     }
   });
 

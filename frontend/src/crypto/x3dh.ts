@@ -80,16 +80,6 @@ export class X3DH {
         // Derive Final Secret using SHA-256 KDF (as per server implementation)
         const sharedSecretBuffer = await window.crypto.subtle.digest("SHA-256", combined);
 
-        // Return mostly as hex string to match current DoubleRatchet expectation or Buffer analog?
-        // The existing DoubleRatchet (frontend/src/crypto/ratchet.ts) expects a string (demo) or buffer? 
-        // Let's check `ratchet.ts`. It seems to take `secret` in constructor.
-        // We will return standard Buffer (Uint8Array) or Hex string depending on consumer.
-        // The server implementation returns a buffer.
-        // Let's return raw bytes for the Ratchet to use.
-        // But since we can't easily pass Uint8Array to the *existing* Demo Ratchet (which takes string), 
-        // we might need to update Ratchet or just Hex encode it.
-        // Ideally we pass the high-entropy byte array.
-
         return {
             sharedSecret: arrayBufferToBase64(sharedSecretBuffer), // Using Base64 to be safe for now, or Hex?
             usedOPK: !!recipientOneTimePreKey

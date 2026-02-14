@@ -29,6 +29,7 @@ export interface IMessage {
   ciphertext: string;
   chatId: string;
   timestamp: Date;
+  delivered: boolean;
 }
 
 // --- Message Schema
@@ -37,7 +38,8 @@ const MessageSchema = new mongoose.Schema<IMessage>({
   to: { type: String, required: true },
   ciphertext: { type: String, required: true },
   chatId: { type: String, required: true, index: true },
-  timestamp: { type: Date, default: Date.now }
+  timestamp: { type: Date, default: Date.now },
+  delivered: { type: Boolean, default: false }
 });
 
 export const MessageModel = mongoose.model<IMessage>('Message', MessageSchema);

@@ -33,9 +33,6 @@ export class KeyManager {
         if (!ik.publicKeyBase64 || !ik.privateKeyBase64) throw new Error("Failed to export Identity Key");
 
         // 2. Signed PreKey
-        // Import Identity Private Key as CryptoKey for signing inside generator?
-        // Our generator `SignedPreKeyGenerator` handles it if we pass the CryptoKey. 
-        // But `ik.privateKey` is the CryptoKey.
         const spkId = 1;
         const spk = await SignedPreKeyGenerator.generate(spkId, ik.privateKey);
 
@@ -66,7 +63,6 @@ export class KeyManager {
         };
 
         // Save to localStorage (Private keys are here!)
-        // In a real app, this should be encrypted with user password/PIN or stored in IndexedDB with request protection.
         localStorage.setItem(`${STORAGE_PREFIX}${userId}`, JSON.stringify(keys));
 
         return keys;

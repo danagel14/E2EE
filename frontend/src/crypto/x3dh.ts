@@ -25,24 +25,27 @@ export class X3DH {
             recipientOneTimePreKey = await importPublicKey(recipientBundle.oneTimePreKey);
         }
 
-        // Verify Signature (Optional but recommended - skipping for strict "make it work" parity first, but easy to add)
-        // To verify: Import IdentityKey as ECDSA, verify 'signedPreKey' signature.
-        /*
-        const verifyKey = await window.crypto.subtle.importKey(
+        // Verify Signature
+        const recipientIdentityKeyForVerification = await window.crypto.subtle.importKey(
             "spki",
             base64ToArrayBuffer(recipientBundle.identityKey),
             { name: "ECDSA", namedCurve: "P-256" },
             true,
             ["verify"]
         );
+
         const signatureValid = await window.crypto.subtle.verify(
             { name: "ECDSA", hash: { name: "SHA-256" } },
-            verifyKey,
+            recipientIdentityKeyForVerification,
             base64ToArrayBuffer(recipientBundle.signedPreKeySignature),
             base64ToArrayBuffer(recipientBundle.signedPreKey)
         );
-        if (!signatureValid) throw new Error("Invalid Signed PreKey Signature");
-        */
+
+        if (!signatureValid) {
+            throw new Error("Invalid Signed PreKey Signature! Potential Man-in-the-Middle Attack.");
+        } else {
+            console.log("✅ Signed PreKey Signature Verified");
+        }
 
         // DH1: IKa || SPKb
         const dh1 = await this.diffieHellman(senderIdentityPriv, recipientSignedPreKey);

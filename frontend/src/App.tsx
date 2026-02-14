@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import ChatList from './components/ChatList'
 import ChatWindow from './components/ChatWindow'
 import ContactsModal from './components/ContactsModal'
 import { DoubleRatchet } from './crypto/ratchet'
 import './App.css'
 
-// חיבור לשרת (וודא שהשרת רץ על פורט 3001)
+// Connection to server (make sure the server is running on port 3001)
 import { io } from 'socket.io-client'
 
 const socket = io('http://localhost:3001', {
@@ -50,14 +50,14 @@ function App() {
   const [messages, setMessages] = useState<Message[]>([])
   const [showContactsModal, setShowContactsModal] = useState(false)
 
-  // זהות המשתמש הנוכחי – ניתנת לבחירה מה-UI
+  // Current user ID (can be selected from the UI)
   const [myId, setMyId] = useState<string>('4')
 
-  // Double Ratchet instances לפענוח הודעות
+  // Double Ratchet instances for decrypting messages
   const [ratchets] = useState<Map<string, DoubleRatchet>>(new Map())
 
 
-  // איפוס צ'אטים והודעות כשמחליפים משתמש
+  // Reset chats and messages when changing user
   useEffect(() => {
     setChats([])
     setMessages([])
@@ -66,15 +66,15 @@ function App() {
   }, [myId])
 
 
-  // --- האזנה להודעות נכנסות מהשרת והרשמה ---
+  // Listen for incoming messages from the server and registration
   useEffect(() => {
     socket.on('connect', async () => {
       console.log('Connected to Socket.IO server, id:', socket.id)
 
-      // הרשמה לשרת עם ה-ID שלי
+      // Register with the server with my ID
       socket.emit('register-session', myId)
 
-      // יצירת מפתחות קריפטוגרפיים בדפדפן ושליחת Public Keys לשרת
+      // Create cryptographic keys in the browser and send Public Keys to the server
       try {
         import('./crypto/keyManager').then(async ({ KeyManager }) => {
           // Generate or load keys
@@ -103,7 +103,7 @@ function App() {
       const fromId = data.from as string
       const timestamp = new Date().toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })
 
-      // פענוח ההודעה עם Double Ratchet
+      // Decrypt the message with Double Ratchet
       const ratchetKey = [myId, fromId].sort().join('|')
       let ratchet = ratchets.get(ratchetKey)
       let plaintext = ''
@@ -173,7 +173,7 @@ function App() {
         plaintext = "[Decryption Error]";
       }
 
-      // עדכון רשימת הצ׳אטים
+      // Update chat list
       setChats(prevChats => {
         const existingChat = prevChats.find(chat => chat.id === fromId)
 
@@ -187,7 +187,7 @@ function App() {
               id: contact.id,
               name: contact.name,
               avatar: contact.avatar,
-              lastMessage: plaintext,  // הטקסט המפוענח!
+              lastMessage: plaintext,  // decrypted text
               timestamp,
               unread: 1,
             },
@@ -206,7 +206,7 @@ function App() {
         )
       })
 
-      // הוספת ההודעה לרשימת ההודעות
+      // Add message to message list
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         chatId: fromId,
@@ -219,9 +219,7 @@ function App() {
 
     socket.on('receive-message', handleReceiveMessage)
 
-
-
-    // אם כבר מחוברים והמשתמש השתנה – לרשום אותו מחדש
+    // If already connected and user changed - re-register
     if (socket.connected) {
       socket.emit('register-session', myId)
       // Key registration repeated...
@@ -229,7 +227,7 @@ function App() {
         const keys = await KeyManager.generateAndSaveKeys(myId);
         if (keys) {
           const publicBundle = KeyManager.getPublicBundle(keys);
-          socket.emit('register-keys', publicBundle, (res: any) => { })
+          socket.emit('register-keys', publicBundle, () => { })
         }
       });
     }
@@ -267,7 +265,7 @@ function App() {
     setShowContactsModal(false)
   }
 
-  // --- לוגיקה מעודכנת: שליחת הודעה עם Socket.io ---
+  // sending message with Socket.io
   const handleSendMessage = async (text: string) => {
     if (!selectedChat || !text.trim()) return
 
@@ -388,7 +386,6 @@ function App() {
   return (
     <div className="app">
       <div className="app-container">
-        {/* פס עליון לבחירת המשתמש המחובר */}
         <div className="app-topbar">
           <span className="app-topbar-label">אני מחובר כ</span>
           <select

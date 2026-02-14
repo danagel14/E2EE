@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-// --- סכמה למשתמשים (נשאר אותו דבר) ---
+// --- User Schema (remains the same) ---
 const UserSchema = new mongoose.Schema({
   userId: { type: String, unique: true, required: true },
 
@@ -22,21 +22,20 @@ const UserSchema = new mongoose.Schema({
 
 export const UserModel = mongoose.model('User', UserSchema);
 
-// --- הגדרת הממשק (Interface) להודעה ---
-// זה מה שמתקן את השגיאה האדומה ב-index.ts!
+// --- Message Interface
 export interface IMessage {
   from: string;
   to: string;
-  ciphertext: string; // <--- הוספנו את זה!
+  ciphertext: string;
   chatId: string;
   timestamp: Date;
 }
 
-// --- סכמה להודעות (מעודכנת) ---
+// --- Message Schema
 const MessageSchema = new mongoose.Schema<IMessage>({
   from: { type: String, required: true },
   to: { type: String, required: true },
-  ciphertext: { type: String, required: true }, // <--- הוספנו את זה!
+  ciphertext: { type: String, required: true },
   chatId: { type: String, required: true, index: true },
   timestamp: { type: Date, default: Date.now }
 });

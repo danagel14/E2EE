@@ -19,7 +19,7 @@
   overflow: hidden;
 }
 
-/* פס עליון לבחירת המשתמש המחובר */
+/* Top bar for selecting the connected user */
 .app-topbar {
   position: absolute;
   top: 14px;

@@ -1,6 +1,6 @@
 import { IdentityKeyGenerator } from './identity';
 import { SignedPreKeyGenerator, OneTimePreKeyGenerator } from './prekey';
-import { arrayBufferToBase64 } from './web-crypto-utils';
+
 
 const STORAGE_PREFIX = 'e2ee_';
 

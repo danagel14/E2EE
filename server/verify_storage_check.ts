@@ -27,14 +27,6 @@ async function verify() {
             // Register sender
             socket.emit("register-session", senderId);
 
-            // We need to simulate the handshake to establish a session first?
-            // Actually, the server attempts to save even if session not fully established?
-            // Looking at index.ts: 
-            // socket.on('send-message', ...) -> checks ratchets -> saves to DB anyway 
-            // It saves to DB right after calculating ciphertext (or plaintext if no ratchet).
-
-            // So we can simpler triggering 'send-message'
-
             const payload = {
                 from: senderId,
                 to: receiverId,
@@ -44,7 +36,6 @@ async function verify() {
             console.log("Sending message:", payload);
             socket.emit("send-message", payload);
 
-            // Wait a bit for async DB save
             setTimeout(async () => {
                 try {
                     console.log("Checking database...");

@@ -1,5 +1,5 @@
 import { io } from "socket.io-client";
-import { DoubleRatchet } from "../crypto/ratchet.js"; // We might need this if we want to simulate full flow, but for now we just check event delivery
+import { DoubleRatchet } from "../crypto/ratchet.js";
 
 const SERVER_URL = "http://127.0.0.1:3001";
 
@@ -22,10 +22,8 @@ async function verifyForwarding() {
     socketAlice.emit('register-session', aliceId);
     socketBob.emit('register-session', bobId);
 
-    // Wait a bit for registration processing
     await new Promise(r => setTimeout(r, 500));
 
-    // Bob listens for message
     const messageReceivedPromise = new Promise((resolve, reject) => {
         socketBob.on('receive-message', (data) => {
             console.log("Bob received message:", data);
@@ -36,23 +34,8 @@ async function verifyForwarding() {
             }
         });
 
-        // Timeout
         setTimeout(() => reject(new Error("Timeout waiting for message")), 5000);
     });
-
-    // Alice sends message
-    // Note: we need to handle the ratchet stuff if the server logic depends on it?
-    // Server logic:
-    // if (!dr) { warn... ciphertext = plaintext }
-    // So we don't strictly need init-session to test "receive-message" emission, 
-    // UNLESS the server errors out before emitting.
-    // The server code:
-    // 1. Logs
-    // 2. Checks ratchets. If missing -> warning, ciphertext=plaintext.
-    // 3. Saves to DB (async)
-    // 4. Emits to target
-
-    // So sending without init-session SHOULD work for verification of routing.
 
     console.log("Alice sending message...");
     socketAlice.emit('send-message', {

@@ -3,34 +3,29 @@ import { SignedPreKeyGenerator } from '../crypto/signed-prekey.js';
 import { OneTimePreKeyGenerator } from '../crypto/optk.js';
 import { UserModel } from './db.js';
 
-/**
- * יצירת כל המפתחות הקריפטוגרפיים למשתמש חדש
- */
+// generate keys for new user
 export async function generateUserKeys(userId: string) {
-    // 1. יצירת Identity Key (IK) - מפתח ארוך טווח
+    // 1. Generate Identity Key (IK) - long term key
     const identityKeyPair = IdentityKeyGenerator.generate();
 
-    // 2. יצירת Signed Pre Key (SPK) - מפתח בינוני טווח
+    // 2. Generate Signed Pre Key (SPK) - intermediate term key
     const signedPreKey = SignedPreKeyGenerator.generate(1, identityKeyPair.privateKey);
 
-    // 3. יצירת One-Time Pre Keys (OPK) - מפתחות חד פעמיים
+    // 3. Generate One-Time Pre Keys (OPK) - short term keys
     const oneTimePreKeys = OneTimePreKeyGenerator.generateBatch(100);
 
-    // שמירה ב-DB
+    // Save to DB
     const user = await UserModel.findOneAndUpdate(
         { userId },
         {
             userId,
             identityKeyPublic: identityKeyPair.publicKey.toString('base64'),
-            identityKeyPrivate: identityKeyPair.privateKey.toString('base64'),
             signedPreKeyId: signedPreKey.keyId,
             signedPreKeyPublic: signedPreKey.publicKey.toString('base64'),
-            signedPreKeyPrivate: signedPreKey.privateKey.toString('base64'),
             signedPreKeySignature: signedPreKey.signature.toString('base64'),
             oneTimePreKeys: oneTimePreKeys.map(opk => ({
                 keyId: opk.keyId,
                 publicKey: opk.publicKey.toString('base64'),
-                privateKey: opk.privateKey.toString('base64'),
                 used: false
             }))
         },
@@ -41,21 +36,19 @@ export async function generateUserKeys(userId: string) {
     return user;
 }
 
-/**
- * שימוש ב-One-Time PreKey (מסמן אותו כמשומש)
- */
-export async function consumeOneTimePreKey(userId: string): Promise<{ keyId: number; publicKey: string; privateKey: string } | null> {
+// Consume One-Time PreKey (Mark it as used)
+export async function consumeOneTimePreKey(userId: string): Promise<{ keyId: number; publicKey: string } | null> {
     const user = await UserModel.findOne({ userId });
     if (!user) return null;
 
-    // מציאת OPK ראשון שלא משומש
+    // Find first available OPK
     const availableKey = user.oneTimePreKeys.find((key: any) => !key.used);
     if (!availableKey) {
         console.warn(`No available OPK for user ${userId}`);
         return null;
     }
 
-    // סימון המפתח כמשומש
+    // Mark OPK as used
     await UserModel.updateOne(
         { userId, 'oneTimePreKeys.keyId': availableKey.keyId },
         { $set: { 'oneTimePreKeys.$.used': true } }
@@ -66,13 +59,10 @@ export async function consumeOneTimePreKey(userId: string): Promise<{ keyId: num
     return {
         keyId: availableKey.keyId,
         publicKey: availableKey.publicKey,
-        privateKey: availableKey.privateKey
     };
 }
 
-/**
- * הוספת OPK חדשים כשהמלאי נגמר
- */
+// Add new OPKs when stock runs out
 export async function replenishOneTimePreKeys(userId: string, count: number = 50) {
     const user = await UserModel.findOne({ userId });
     if (!user) return;
@@ -86,7 +76,6 @@ export async function replenishOneTimePreKeys(userId: string, count: number = 50
         const newOPKs = newKeys.map((opk, index) => ({
             keyId: maxKeyId + index + 1,
             publicKey: opk.publicKey.toString('base64'),
-            privateKey: opk.privateKey.toString('base64'),
             used: false
         }));
 
@@ -99,14 +88,12 @@ export async function replenishOneTimePreKeys(userId: string, count: number = 50
     }
 }
 
-/**
- * קבלת Key Bundle למשתמש (לשימוש ב-X3DH)
- */
+// Get Key Bundle for user (for X3DH)
 export async function getUserKeyBundle(userId: string) {
     const user = await UserModel.findOne({ userId });
     if (!user) return null;
 
-    // מציאת OPK זמין
+    // Find first available OPK
     const availableOPK = user.oneTimePreKeys.find((key: any) => !key.used);
 
     return {
